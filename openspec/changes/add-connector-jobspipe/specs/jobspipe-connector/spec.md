@@ -6,12 +6,15 @@
 The jobspipe provider SHALL declare name `jobspipe`, `request.baseUrl`
 `https://api.jobspipe.dev`, auth `presets.auth.bearer()` with the default
 `{apiKey}` credential shape (env `JOBSPIPE_CREDENTIALS_API_KEY`, alias
-`JOBSPIPE_API_KEY`), timeouts 30 s request / 30 s run, one credit pool
+`JOBSPIPE_API_KEY`), timeouts 30 s request / 30 s run (the agentic search and the scan override
+to 45 s: the vendor documents the agentic search at up to about 30 s and the
+scan answers 504 past its own budget), one credit pool
 `default` ("JobsPipe credits"), categories `jobs` and `company-enrichment`,
 a provider-level `usage.consolidate` that plucks `$.metadata.credits_charged`
 out of the output and claims it on `default` when it is a number (omitting
 the claim otherwise), a provider-level `usage.evidence` that counts
-`$.data` on PER_UNIT docs and nothing on flat docs (the scan overrides it), and a provider-level
+`$.data` minus `$.metadata.jobs_already_paid` on PER_UNIT docs and nothing
+on flat docs (the search and the scan override it), and a provider-level
 `output.fromError` that normalizes `{error, message?}` into
 `{message, detail?, raw}`. The provider SHALL NOT declare a lifecycle or an
 `input.toRequest`.
@@ -19,19 +22,32 @@ the claim otherwise), a provider-level `usage.evidence` that counts
 #### Scenario: Claim agrees with the fold
 - **WHEN** `POST /v1/jobs/search` with `limit: 3` returns 3 postings and
   `metadata.credits_charged: 3`
-- **THEN** usage is `{credits: {default: 3}, evidence: {RESULT: 3}}` with no
-  `mismatch`, and `credits_charged` is absent from the output while
+- **THEN** usage is `{credits: {default: 3}, evidence: {postings: 3,
+  technologies: 0}}` with no `mismatch`, and `credits_charged` is absent from the output while
   `jobs_already_paid`, `next_cursor` and `credits_remaining` remain
 
-#### Scenario: Already-paid postings make the claim win over the fold
+#### Scenario: Already-paid postings are folded out, so the fold agrees with the claim
 - **WHEN** the same search returns 3 postings with `credits_charged: 1` and
   `jobs_already_paid: 2`
-- **THEN** usage is `{credits: {default: 1}, evidence: {RESULT: 3},
-  mismatch: {derived: {default: 3}}}`
+- **THEN** usage is `{credits: {default: 1}, evidence: {postings: 1,
+  technologies: 0}}` with no `mismatch`
+
+#### Scenario: A fully-paid page settles at zero despite the pruned claim
+- **WHEN** the same search returns 3 postings with `credits_charged: 0` and
+  `jobs_already_paid: 3`
+- **THEN** usage is `{credits: {}, evidence: {postings: 0, technologies: 0}}`
+  (a zero claim is pruned at settle; the fold must not bill the free rows)
+
+#### Scenario: The technologies opt-in is a second billable line
+- **WHEN** a search with `include_technologies: true` returns 2 postings
+  that each name a technology, `credits_charged: 4`,
+  `technologies_credits_charged: 2` and `technologies_already_paid: 0`
+- **THEN** usage is `{credits: {default: 4}, evidence: {postings: 2,
+  technologies: 2}}` with no `mismatch`
 
 #### Scenario: Empty page bills nothing
 - **WHEN** a search returns `data: []` and `credits_charged: 0`
-- **THEN** usage is `{credits: {}, evidence: {RESULT: 0}}`
+- **THEN** usage is `{credits: {}, evidence: {postings: 0, technologies: 0}}`
 
 #### Scenario: The flat lookup has no meter and settles on the fold
 - **WHEN** `GET /v1/companies/{key}` answers 200
@@ -91,11 +107,17 @@ bounds; the search `limit` keeps the vendor's floor of 1.
 
 #### Scenario: The estimate is the limit
 - **WHEN** `jobspipe#v1/jobs/search` is estimated with `limit: 25`
-- **THEN** the estimate is `{credits: {default: 25}, evidence: {RESULT: 25}}`
+- **THEN** the estimate is `{credits: {default: 25}, evidence: {postings: 25,
+  technologies: 0}}`; with `include_technologies: true` it is
+  `{credits: {default: 50}, evidence: {postings: 25, technologies: 25}}`
 
 ### Requirement: Four endpoints, one card
-`jobspipe#v1/jobs/search` (POST) and `jobspipe#v1/jobs/agentic-search`
-(POST) SHALL price PER_UNIT · RESULT at 1 credit; `jobspipe#v1/companies/{key}`
+`jobspipe#v1/jobs/search` (POST) SHALL price a COMPOSITE of two PER_UNIT ·
+RESULT components at 1 credit each — `postings` (rows minus
+`jobs_already_paid`) and `technologies` (rows naming at least one technology
+minus `technologies_already_paid`, the `include_technologies` surcharge);
+`jobspipe#v1/jobs/agentic-search` (POST) SHALL price PER_UNIT · RESULT at
+1 credit; `jobspipe#v1/companies/{key}`
 (GET, path param `key`) SHALL price PER_CALL at 1 credit;
 `jobspipe#v1/stack/scan` (POST) SHALL price PER_UNIT · CREDIT at 1 credit
 with its own evidence of 1 when `detected` is non-empty and 0 otherwise,

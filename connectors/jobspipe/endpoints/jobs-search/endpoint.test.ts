@@ -29,11 +29,12 @@ Deno.test("jobspipe#v1/jobs/search happy: one credit per job, the vendor's credi
     });
     assertEquals(result.httpStatus, 200);
     assertEquals(result.isProviderError, false);
-    // D27 claim-wins: metadata.credits_charged (2) IS the bill; the
-    // per-result fold also says 2, so no mismatch key (zUsage is strict)
+    // D27 claim-wins: metadata.credits_charged (2) IS the bill; the fold
+    // (2 rows, none already paid, no technologies asked for) also says 2,
+    // so no mismatch key (zUsage is strict)
     assertEquals(result.usage, {
         credits: { default: 2 },
-        evidence: { RESULT: 2 },
+        evidence: { postings: 2, technologies: 0 },
     });
     const output = result.output as Record<string, Json>;
     const metadata = output.metadata as Record<string, Json>;
@@ -49,7 +50,7 @@ Deno.test("jobspipe#v1/jobs/search happy: one credit per job, the vendor's credi
     ]);
 });
 
-Deno.test("jobspipe#v1/jobs/search already-paid (synthetic): rows paid earlier this month are free — the claim wins, the fold rides as mismatch", async () => {
+Deno.test("jobspipe#v1/jobs/search already-paid (synthetic): rows paid earlier this month are free — the fold subtracts them and agrees with the claim", async () => {
     const unit = await testSealedUnit("jobspipe#v1/jobs/search");
     const fixture = await loadFixture(
         `${fixturesDir}synthetic-already-paid.json`,
@@ -67,11 +68,81 @@ Deno.test("jobspipe#v1/jobs/search already-paid (synthetic): rows paid earlier t
         fixture,
     });
     assertEquals(result.httpStatus, 200);
+    // 3 rows, 2 of them jobs_already_paid ⇒ 1 billable posting, which is
+    // exactly the vendor's claim — no mismatch
     assertEquals(result.usage, {
         credits: { default: 1 },
-        evidence: { RESULT: 3 },
-        mismatch: { derived: { default: 3 } },
+        evidence: { postings: 1, technologies: 0 },
     });
+});
+
+Deno.test("jobspipe#v1/jobs/search all already paid (synthetic): a zero claim is pruned at settle, so the fold must bill nothing for a fully-paid page", async () => {
+    const unit = await testSealedUnit("jobspipe#v1/jobs/search");
+    const fixture = await loadFixture(
+        `${fixturesDir}synthetic-all-already-paid.json`,
+    );
+    const result = await runEndpoint({
+        unit,
+        input: {
+            body: {
+                job_title_or: ["data engineer"],
+                job_country_code_or: ["US"],
+                limit: 3,
+            },
+        },
+        mode: "replay",
+        fixture,
+    });
+    assertEquals(result.httpStatus, 200);
+    assertEquals(result.isProviderError, false);
+    // credits_charged: 0 with 3 rows — the claim prunes to empty and the
+    // fold (3 − 3 already paid) settles the same zero
+    assertEquals(result.usage, {
+        credits: {},
+        evidence: { postings: 0, technologies: 0 },
+    });
+    const metadata = (result.output as Record<string, Json>)
+        .metadata as Record<string, Json>;
+    assertEquals(metadata.jobs_already_paid, 3);
+});
+
+Deno.test("jobspipe#v1/jobs/search technologies: the include_technologies opt-in is a second line, one credit per posting that names a technology", async () => {
+    const unit = await testSealedUnit("jobspipe#v1/jobs/search");
+    const fixture = await loadFixture(`${fixturesDir}technologies.json`);
+    const result = await runEndpoint({
+        unit,
+        input: {
+            body: {
+                job_title_or: ["data engineer"],
+                job_country_code_or: ["US"],
+                posted_at_max_age_days: 30,
+                limit: 2,
+                include_technologies: true,
+            },
+        },
+        mode: "replay",
+        fixture,
+    });
+    assertEquals(result.httpStatus, 200);
+    assertEquals(result.isProviderError, false);
+    // the vendor's claim (credits_charged: 4) already folds the technology
+    // credits in; our two components reproduce it: 2 postings + 2 postings
+    // naming at least one technology
+    assertEquals(result.usage, {
+        credits: { default: 4 },
+        evidence: { postings: 2, technologies: 2 },
+    });
+    const output = result.output as Record<string, Json>;
+    const metadata = output.metadata as Record<string, Json>;
+    assertEquals("credits_charged" in metadata, false);
+    assertEquals(metadata.technologies_credits_charged, 2);
+    assertEquals(metadata.technologies_already_paid, 0);
+    const rows = output.data as Record<string, Json>[];
+    assertEquals(rows.length, 2);
+    for (const row of rows) {
+        assert(Array.isArray(row.technologies));
+        assert((row.technologies as unknown[]).length > 0);
+    }
 });
 
 Deno.test("jobspipe#v1/jobs/search empty: a 200 with no postings bills nothing", async () => {
@@ -85,7 +156,10 @@ Deno.test("jobspipe#v1/jobs/search empty: a 200 with no postings bills nothing",
     });
     assertEquals(result.httpStatus, 200);
     assertEquals(result.isProviderError, false);
-    assertEquals(result.usage, { credits: {}, evidence: { RESULT: 0 } });
+    assertEquals(result.usage, {
+        credits: {},
+        evidence: { postings: 0, technologies: 0 },
+    });
 });
 
 Deno.test("jobspipe#v1/jobs/search provider error (synthetic): 402 quota is data, zero usage, digested with the raw body kept", async () => {
@@ -139,8 +213,45 @@ Deno.test("jobspipe#v1/jobs/search: limit is REQUIRED at the binding and is the 
     });
     assertEquals(estimate, {
         credits: { default: 25 },
-        evidence: { RESULT: 25 },
+        evidence: { postings: 25, technologies: 0 },
     });
+    // the opt-in doubles the ceiling: every returned job may name a
+    // technology, and each one that does is one more credit
+    assertEquals(
+        await estimateEndpoint(unit, {
+            body: {
+                job_country_code_or: ["US"],
+                limit: 25,
+                include_technologies: true,
+            },
+        }),
+        {
+            credits: { default: 50 },
+            evidence: { postings: 25, technologies: 25 },
+        },
+    );
+    // the published bounds are the mirror's: at most 10 technology slugs,
+    // non-negative revenue, 1–50 LEIs of 20 characters, one sort key
+    for (
+        const body of [
+            { limit: 1, company_technology_slug_or: Array(11).fill("dbt") },
+            { limit: 1, min_revenue_usd: -1 },
+            { limit: 1, lei_or: [] },
+            { limit: 1, lei_or: ["too-short"] },
+            {
+                limit: 1,
+                order_by: [{ field: "posted_at" }, { field: "posted_at" }],
+            },
+        ] as Json[]
+    ) {
+        await assertRejects(
+            () =>
+                runEndpoint({ unit, input: { body }, mode: "replay", fixture }),
+            Error,
+            "INVALID_INPUT",
+            JSON.stringify(body),
+        );
+    }
     // the compiled schema is the published surface: cursor + order_by are
     // in, the deprecated no-op `blur_company_data` is not
     const properties = unit.doc.input.schema.body?.properties as Record<
@@ -174,10 +285,13 @@ Deno.test({
             false,
             JSON.stringify(result.output),
         );
-        // evidence counts the rows; the bill is the vendor's own claim,
-        // which is the row count minus whatever this account already paid
-        // for this month — assert the pool settled, not the amount
-        assertEquals(Object.keys(result.usage.evidence), ["RESULT"]);
+        // evidence carries both components; the bill is the vendor's own
+        // claim, which depends on what this account already paid for this
+        // month — assert the shape, not the amount
+        assertEquals(Object.keys(result.usage.evidence), [
+            "postings",
+            "technologies",
+        ]);
         assertEquals(typeof result.usage.credits.default, "number");
         const metadata = (result.output as Record<string, Json>)
             .metadata as Record<string, Json>;

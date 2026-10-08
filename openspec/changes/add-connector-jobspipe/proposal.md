@@ -24,8 +24,11 @@ It is also the first `jobs` connector: the leaf exists in
   `usage.consolidate` that lifts the vendor's `metadata.credits_charged`
   claim, a generic `usage.evidence` that counts `data[]` on per-unit docs,
   and an `output.fromError` that digests `{error, message?}`.
-  - `#v1/jobs/search` — filter search, PER_UNIT · RESULT, 1 credit per
-    posting returned; `limit` REQUIRED at the binding (D25).
+  - `#v1/jobs/search` — filter search, a COMPOSITE of two PER_UNIT ·
+    RESULT lines at 1 credit each: `postings` and, behind the
+    `include_technologies` opt-in, `technologies` (one extra credit per
+    returned posting that names a technology); `limit` REQUIRED at the
+    binding (D25).
   - `#v1/jobs/agentic-search` — plain-language search, same card, `limit`
     REQUIRED, 25-posting ceiling, longer timeout.
   - `#v1/companies/{key}` — one company's enriched record by domain / URL /
@@ -40,17 +43,21 @@ It is also the first `jobs` connector: the leaf exists in
   declares `input.toRequest`: the validated input IS the wire body. The one
   deliberate omission is `blur_company_data`, which the spec marks
   DEPRECATED and ignored.
-- **Claim wins, fold cross-checks.** JobsPipe charges a posting once per
+- **Claim wins, fold agrees.** JobsPipe charges a posting once per
   calendar month per account: a page that repeats already-paid postings
   bills less than its row count, and `credits_charged` says how much. The
-  consolidate lifts that number out as the claim (D27); the per-result fold
-  rides out as `mismatch.derived` whenever rows were free. The flat docs
-  carry no meter, so their claim is empty and the derived fold settles.
+  consolidate lifts that number out as the claim (D27). The evidence folds
+  the vendor's own `jobs_already_paid` (and `technologies_already_paid`)
+  out of the row counts, so the fold agrees with the claim — and, since a
+  zero claim is pruned at settle, a fully-paid page folds to 0 instead of
+  billing rows the vendor gave away. The flat docs carry no meter, so
+  their claim is empty and the derived fold settles.
 - Real recorded fixtures, trimmed, for every reachable scenario (including
-  the empty stripe.com scan); synthetic
-  (`synthetic-` prefix) only for the three a single account cannot
-  reproduce on demand — the already-paid discount, the 402 quota and the
-  agentic 503 — plus a curated `test-inputs.json` for `deno task record`.
+  the empty stripe.com scan and a search with `include_technologies`);
+  synthetic (`synthetic-` prefix) only for the four a single account cannot
+  reproduce on demand — the partial and the full already-paid discount, the
+  402 quota and the agentic 503 — plus a curated `test-inputs.json` for
+  `deno task record`.
 
 ## Capabilities
 

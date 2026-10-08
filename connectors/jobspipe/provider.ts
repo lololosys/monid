@@ -21,11 +21,15 @@ import { defineProvider, presets } from "@shared/core";
  * Only the searches carry a meter: `metadata.credits_charged` is the
  * vendor's own statement of what the call cost AFTER the already-paid
  * discount, so the provider consolidate lifts it out as the claim (design
- * D27 — the claim wins; the per-result fold rides out as `mismatch.derived`
- * whenever rows were free). The flat docs have no such field, so their
- * claim is empty and the derived fold settles. Evidence is the generic
- * quantities default — a PER_UNIT doc counts `data[]` — except the scan,
- * which owns a 0/1 counter on `detected`.
+ * D27 — the claim wins). The fold is built to agree with it: the generic
+ * evidence counts the postings in `data[]` MINUS `metadata.jobs_already_paid`
+ * (the vendor's own count of the free rows on the page), so a page of
+ * already-paid postings folds to 0 — which matters because a zero claim is
+ * pruned at settle and the fold would otherwise bill rows the vendor gave
+ * away. The flat docs have no meter, so their claim is empty and the
+ * derived fold settles. The search's `include_technologies` surcharge is
+ * a second component with its own evidence (see jobs-search), and the
+ * scan owns a 0/1 counter on `detected`.
  */
 export default defineProvider({
     name: "jobspipe",
@@ -97,13 +101,22 @@ export default defineProvider({
             };
         },
         /** The generic QUANTITIES default (design D27): a PER_UNIT doc
-         *  counts the postings in `data[]` ("one credit is one job
-         *  returned"); the flat docs have nothing to count. A 200 with no
-         *  matches carries an empty array — 0 rows, 0 credits. */
+         *  counts the BILLABLE postings in `data[]` — "one credit is one job
+         *  returned", minus the rows the vendor reports as already paid for
+         *  this month (`metadata.jobs_already_paid`), so the fold agrees
+         *  with the claim and a fully-paid page folds to 0. The flat docs
+         *  have nothing to count. A 200 with no matches carries an empty
+         *  array — 0 rows, 0 credits. */
         evidence: ({ data, utils }) => {
             if (data.usage.model.kind !== "PER_UNIT") return { counts: {} };
             const rows = utils.json.optionalLen(data.output, "$.data") ?? 0;
-            return { counts: { [data.usage.model.unit]: rows } };
+            const paid = utils.json.optionalNum(
+                data.output,
+                "$.metadata.jobs_already_paid",
+            ) ?? 0;
+            return {
+                counts: { [data.usage.model.unit]: Math.max(0, rows - paid) },
+            };
         },
     },
     output: {

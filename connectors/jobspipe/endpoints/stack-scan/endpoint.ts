@@ -43,9 +43,11 @@ export default defineEndpoint({
     },
     request: { method: "POST", path: "/v1/stack/scan" },
     input: { schema: { body: zJobsPipeStackScanBody } },
-    // a rendered scan can take a while; the vendor answers 504 past its
-    // own budget
-    timeouts: { requestMs: 60_000, runMs: 60_000 },
+    // a rendered scan (mode "render") fetches and executes the page; the
+    // vendor answers 504 past its own budget, which sits above the
+    // provider's 30 s, so 45 s here lets that 504 arrive as data instead
+    // of our timeout
+    timeouts: { requestMs: 45_000, runMs: 45_000 },
     usage: {
         model: {
             kind: UsageModelKind.PER_UNIT,

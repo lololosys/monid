@@ -27,32 +27,46 @@
 ## 3. Endpoints (4)
 
 - [x] 3.1 `jobs-search` — strict mirror of `JobSearchRequest` minus the
-      deprecated flag; `limit` required; PER_UNIT · RESULT; estimate = limit
+      deprecated flag, with the published bounds (10 technology slugs,
+      non-negative revenue, 1–50 LEIs, one sort key); `limit` required;
+      COMPOSITE of two PER_UNIT · RESULT lines (`postings`, `technologies`);
+      estimate = limit, doubled under `include_technologies`; own evidence
+      that folds `jobs_already_paid` / `technologies_already_paid` out
 - [x] 3.2 `agentic-search` — strict mirror of `AgenticSearchRequest` with an
       open `filters` record; `limit` required (1–25); PER_UNIT · RESULT;
-      60 s timeout
+      45 s timeout (vendor: up to about 30 s)
 - [x] 3.3 `company-lookup` — `GET /v1/companies/{key}` path param mirror;
       PER_CALL 1 (quantities fns synthesized)
 - [x] 3.4 `stack-scan` — strict mirror of `StackScanRequest`; PER_UNIT ·
-      CREDIT with a 0/1 evidence on `detected`; 60 s timeout
+      CREDIT with a 0/1 evidence on `detected`; 45 s timeout
 
 ## 4. Fixtures + tests
 
-- [x] 4.1 Recorded chains via `deno task record` (2026-10-07, trimmed):
-      search happy / empty, agentic happy, lookup happy / 404, scan happy /
-      empty / 400. Synthetic (`synthetic-` prefix) where a recording is not
-      reachable from one account: search already-paid (the recording key
+- [x] 4.1 Recorded chains via `deno task record` (2026-10-07/08, trimmed):
+      search happy / empty / technologies (`include_technologies`), agentic
+      happy, lookup happy / 404, scan happy / empty / 400. Synthetic
+      (`synthetic-` prefix) where a recording is not reachable from one
+      account: search already-paid and all-already-paid (the recording key
       is unmetered, so the vendor never discounts it), search 402, agentic
       503
-- [x] 4.2 Per-endpoint replay tests: happy usage, claim-vs-fold mismatch,
-      empty page, provider error digest, binding gates, estimates
+- [x] 4.2 Per-endpoint replay tests: happy usage with the whole output
+      deep-equalled to the fixture body on the flat docs, the already-paid
+      folds (partial and full), the technologies line, empty page, provider
+      error digest, binding gates and published bounds, estimates
 - [x] 4.3 Provider-level `provider.test.ts`: the four ids, interned
       inject / consolidate / evidence, one pool, the card by kind, the wire
       form
-- [x] 4.4 Gated live tests on every endpoint (`JOBSPIPE_API_KEY`)
+- [x] 4.4 Gated live tests on every endpoint (`JOBSPIPE_API_KEY`), shape
+      not amounts
 - [x] 4.5 `deno task test:live` green against a real key (all four)
 
 ## 5. Wiring + docs
+
+- [x] 5.0 Review round (PR #98, 2026-10-08): technologies surcharge modelled,
+      already-paid rows folded out (a zero claim is pruned at settle),
+      input bounds, 45 s timeouts with the vendor's numbers, test style per
+      the path rules; the stack-scan 0/1 card stands — the vendor's own page
+      says a scan that detects nothing costs nothing
 
 - [x] 5.1 The four ids in `connectors/ids.lock.json`
 - [x] 5.2 Verify: fmt · lint · check · test · ids:check (the jobspipe

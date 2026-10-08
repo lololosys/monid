@@ -45,8 +45,11 @@ export default defineEndpoint({
             body: zJobsPipeAgenticSearchBody.required({ limit: true }),
         },
     },
-    // typically 5–15 s upstream; leave headroom
-    timeouts: { requestMs: 60_000, runMs: 60_000 },
+    // the vendor documents 5–15 s typical and "up to about 30 when a
+    // second planning round is needed", asking clients to set timeouts
+    // accordingly (docs.jobspipe.dev/api-reference/agentic-search): the
+    // provider's 30 s would cut exactly those calls, so 45 s here
+    timeouts: { requestMs: 45_000, runMs: 45_000 },
     usage: {
         model: {
             kind: UsageModelKind.PER_UNIT,

@@ -3,14 +3,22 @@ import { zJobsPipeJobSearchBody } from "./schema/inputs.ts";
 
 /**
  * `POST /v1/jobs/search` — filter search over the live corpus, one credit
- * per posting returned.
+ * per posting returned, plus one per posting that names a technology when
+ * `include_technologies` is set (the vendor's second line, reported in
+ * `metadata.technologies_credits_charged` and folded into
+ * `credits_charged`).
+ *
+ * Two components, both 1 credit per RESULT: `postings` counts the rows
+ * minus `jobs_already_paid`; `technologies` counts the rows that carry a
+ * non-empty `technologies` array minus `technologies_already_paid`. The
+ * estimate promises `limit` postings and, with the opt-in, `limit`
+ * technology lines (the ceiling: every returned job could name one).
  *
  * `limit` is REQUIRED at the binding (design D25 — the mirror stays the
  * faithful vendor contract, optional with vendor default 25): it is the
  * estimate's whole basis, so the caller states the cap. The bill itself is
  * the vendor's `metadata.credits_charged` claim (provider consolidate),
- * which is at most the row count and less when rows were already paid for
- * this month.
+ * which the fold is built to agree with.
  */
 export default defineEndpoint({
     meta: {
@@ -38,7 +46,10 @@ export default defineEndpoint({
             "jobspipe#v1/companies/{key} for the full record of one " +
             "employer. One credit per posting returned; a posting this " +
             "account already paid for this month is free; an empty " +
-            "result costs nothing.",
+            "result costs nothing. include_technologies adds the graded " +
+            "technologies each posting names for one extra credit per " +
+            "returned job that names at least one, once per job per " +
+            "month.",
         docsUrl: "https://docs.jobspipe.dev/api-reference/jobs-search",
         categories: ["jobs"],
         notes: [
@@ -58,22 +69,77 @@ export default defineEndpoint({
         schema: { body: zJobsPipeJobSearchBody.required({ limit: true }) },
     },
     usage: {
-        /** "One credit is one job returned" — from the provider's single
-         *  pool. Settle is inherited: the provider evidence counts `data[]`
-         *  and the provider consolidate lifts `credits_charged`. */
+        /** "One credit is one job returned" plus the technologies line —
+         *  both from the provider's single pool. The provider consolidate
+         *  lifts `credits_charged` (which already includes the technology
+         *  credits) as the claim; the evidence below folds the two
+         *  components to agree with it. */
         model: {
-            kind: UsageModelKind.PER_UNIT,
-            unit: Unit.RESULT,
-            label: "postings",
-            consumes: { credit: "default", amount: 1 },
-            description: "one credit per posting returned; postings already " +
-                "paid for this calendar month are free",
+            kind: UsageModelKind.COMPOSITE,
+            components: {
+                postings: {
+                    kind: UsageModelKind.PER_UNIT,
+                    unit: Unit.RESULT,
+                    label: "postings",
+                    consumes: { credit: "default", amount: 1 },
+                    description: "one credit per posting returned; " +
+                        "postings already paid for this calendar month " +
+                        "are free",
+                },
+                technologies: {
+                    kind: UsageModelKind.PER_UNIT,
+                    unit: Unit.RESULT,
+                    label: "technology lines",
+                    consumes: { credit: "default", amount: 1 },
+                    description: "with include_technologies, one extra " +
+                        "credit per returned posting that names at least " +
+                        "one technology; free again for the rest of the " +
+                        "month once paid",
+                },
+            },
         },
         /** The caller-stated limit IS the posting promise (typed read of
-         *  the pre-toRequest validated input — design D25). The plan cap
-         *  may clamp it lower; the vendor claim settles the truth. */
+         *  the pre-toRequest validated input — design D25); the opt-in
+         *  doubles the ceiling, since every returned job may name a
+         *  technology. The plan cap may clamp it lower; the vendor claim
+         *  settles the truth. */
         estimate: ({ data }) => ({
-            counts: { "RESULT": data.input.body.limit },
+            counts: {
+                postings: data.input.body.limit,
+                technologies: data.input.body.include_technologies === true
+                    ? data.input.body.limit
+                    : 0,
+            },
         }),
+        /** Both components read off the response: billable postings are
+         *  the rows minus the vendor's already-paid count; billable
+         *  technology lines are the rows whose `technologies` is
+         *  non-empty minus `technologies_already_paid` (absent, as is the
+         *  field itself, unless include_technologies was set). */
+        evidence: ({ data, utils }) => {
+            const rows = utils.json.optionalLen(data.output, "$.data") ?? 0;
+            const paid = utils.json.optionalNum(
+                data.output,
+                "$.metadata.jobs_already_paid",
+            ) ?? 0;
+            const techPaid = utils.json.optionalNum(
+                data.output,
+                "$.metadata.technologies_already_paid",
+            ) ?? 0;
+            let named = 0;
+            for (let i = 0; i < rows; i++) {
+                const n = utils.json.optionalLen(
+                    data.output,
+                    `$.data[${i}].technologies`,
+                ) ?? 0;
+                if (n > 0) named++;
+            }
+            return {
+                counts: {
+                    postings: Math.max(0, rows - paid),
+                    technologies: Math.max(0, named - techPaid),
+                },
+            };
+        },
     },
 });

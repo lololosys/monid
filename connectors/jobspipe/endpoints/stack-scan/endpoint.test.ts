@@ -27,6 +27,8 @@ Deno.test("jobspipe#v1/stack/scan happy: one credit for a scan that detected som
         credits: { default: 1 },
         evidence: { CREDIT: 1 },
     });
+    // the whole scan, untouched: no meter in this body, nothing plucked
+    assertEquals(result.output, fixture.calls[0].res.body);
     const output = result.output as Record<string, Json>;
     assertEquals(output.domain, "vercel.com");
     const detected = output.detected as Record<string, Json>[];
@@ -124,11 +126,9 @@ Deno.test({
         );
         const detected = (result.output as Record<string, Json>).detected;
         assertEquals(Array.isArray(detected), true);
-        // one credit iff the scan detected something (vendor rule)
-        const productive = (detected as unknown[]).length > 0 ? 1 : 0;
-        assertEquals(result.usage, {
-            credits: { ...(productive ? { default: 1 } : {}) },
-            evidence: { CREDIT: productive },
-        });
+        // shape, not amounts: the scan's own 0/1 evidence line is present;
+        // the exact credit per outcome is pinned by the replay tests
+        assertEquals(Object.keys(result.usage.evidence), ["CREDIT"]);
+        assertEquals(typeof result.usage.evidence.CREDIT, "number");
     },
 });

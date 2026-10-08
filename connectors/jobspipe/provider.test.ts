@@ -4,7 +4,9 @@ import { testBundle } from "@shared/testing";
 /**
  * JobsPipe's rate card, stated as LITERALS (clay D7a — deriving them from
  * the docs would make this a tautology): one credit per job returned on
- * the two searches, one flat credit per call on the lookup and the scan.
+ * the two searches (the filter search adds a second one-credit line per
+ * posting naming a technology behind `include_technologies`), one flat
+ * credit per call on the lookup, and one on a scan that detected anything.
  * Every doc drains the ONE pool (`default`, JobsPipe credits), sends the
  * key as a bearer token, and inherits the provider's consolidate (the
  * search responses carry `metadata.credits_charged`; the flat docs
@@ -32,9 +34,12 @@ Deno.test("jobspipe: four docs, one pool, bearer auth, shared settle fns", async
             id,
         );
         // the stack scan owns its evidence (it counts `detected`, and
-        // bills only when that is non-empty); the rest share the
-        // provider's `data[]` counter
-        if (id !== "jobspipe#v1/stack/scan") {
+        // bills only when that is non-empty) and so does the filter
+        // search (two components); the rest share the provider's
+        // billable-`data[]` counter
+        if (
+            id !== "jobspipe#v1/stack/scan" && id !== "jobspipe#v1/jobs/search"
+        ) {
             assertEquals(
                 doc.usage.evidence.$fn.key,
                 first.usage.evidence.$fn.key,
@@ -45,11 +50,12 @@ Deno.test("jobspipe: four docs, one pool, bearer auth, shared settle fns", async
         // ONE pool, drained by every doc
         assertEquals(Object.keys(doc.usage.credits), ["default"], id);
         const model = doc.usage.model;
-        assertEquals(
-            "consumes" in model ? model.consumes.credit : undefined,
-            "default",
-            id,
-        );
+        const pools = model.kind === "COMPOSITE"
+            ? Object.values(model.components).map((c) =>
+                "consumes" in c ? c.consumes.credit : undefined
+            )
+            : ["consumes" in model ? model.consumes.credit : undefined];
+        assertEquals(pools, pools.map(() => "default"), id);
         // the validated input IS the wire body — no toRequest anywhere
         assertEquals(doc.input.toRequest, undefined, id);
         assertEquals(doc.output.fromResponse, undefined, id);
@@ -67,15 +73,16 @@ Deno.test("jobspipe: four docs, one pool, bearer auth, shared settle fns", async
             url: "https://api.jobspipe.dev/v1/companies/{key}",
         },
     );
-    // the card: per-result searches, flat lookup, scan metered 0/1 on
-    // whether it detected anything
+    // the card: the filter search is two per-result lines (postings +
+    // technology lines), the agentic search one, flat lookup, scan
+    // metered 0/1 on whether it detected anything
     const kinds = Object.fromEntries(
         ids.map((id) => [id, bundle.endpoints[id].usage.model.kind]),
     );
     assertEquals(kinds, {
         "jobspipe#v1/companies/{key}": "PER_CALL",
         "jobspipe#v1/jobs/agentic-search": "PER_UNIT",
-        "jobspipe#v1/jobs/search": "PER_UNIT",
+        "jobspipe#v1/jobs/search": "COMPOSITE",
         "jobspipe#v1/stack/scan": "PER_UNIT",
     });
 });

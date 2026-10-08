@@ -82,7 +82,7 @@ export const zJobsPipeJobSearchBody = z.strictObject({
     company_name_partial_match_or: z.array(z.string()).describe(
         "Match any of these company names (partial / contains).",
     ).optional(),
-    company_technology_slug_or: z.array(z.string()).describe(
+    company_technology_slug_or: z.array(z.string()).max(10).describe(
         'Beta. Only jobs at companies whose own postings show they use any of these technologies (evidence tier likely or confirmed), e.g. ["snowflake", "dbt"]. At most 10 slugs. Answers 400 "filter not enabled" until the filter is switched on.',
     ).optional(),
     min_employee_count: z.number().int().describe(
@@ -91,15 +91,16 @@ export const zJobsPipeJobSearchBody = z.strictObject({
     max_employee_count: z.number().int().describe(
         'Only jobs at companies with at most this many employees. Uses the exact headcount where known; a company known only by a size band matches when the band starts at or below this number ("11-50" matches 100, "10,000+" does not).',
     ).optional(),
-    min_revenue_usd: z.number().describe(
+    min_revenue_usd: z.number().min(0).describe(
         'Only jobs at companies whose estimated annual revenue, in US dollars, is at least this amount (the published revenue_usd). Companies with no revenue on record are excluded unless include_unknown contains "company_revenue".',
     ).optional(),
-    max_revenue_usd: z.number().describe(
+    max_revenue_usd: z.number().min(0).describe(
         'Only jobs at companies whose estimated annual revenue, in US dollars, is at most this amount (the published revenue_usd). Companies with no revenue on record are excluded unless include_unknown contains "company_revenue".',
     ).optional(),
-    lei_or: z.array(z.string()).describe(
-        'Legal Entity Identifiers (ISO 17442). Matches jobs at a company with one of these LEIs or at any company in the corporate group the LEI heads. 1 to 50 LEIs of 20 letters and digits, e.g. ["5493001KJTIIGC8Y1R12"]; case is ignored, and a comma-separated string is accepted. Jobs at companies without a known LEI never match.',
-    ).optional(),
+    lei_or: z.array(z.string().regex(/^[0-9A-Za-z]{20}$/)).min(1).max(50)
+        .describe(
+            'Legal Entity Identifiers (ISO 17442). Matches jobs at a company with one of these LEIs or at any company in the corporate group the LEI heads. 1 to 50 LEIs of 20 letters and digits, e.g. ["5493001KJTIIGC8Y1R12"]; case is ignored, and a comma-separated string is accepted. Jobs at companies without a known LEI never match.',
+        ).optional(),
     remote: z.boolean().describe(
         "true for remote-only, false to exclude remote.",
     ).optional(),
@@ -180,7 +181,7 @@ export const zJobsPipeJobSearchBody = z.strictObject({
     ).optional(),
     order_by: z.array(
         z.object({ field: z.string(), desc: z.boolean().optional() }),
-    ).describe(
+    ).max(1).describe(
         'Sort order. Results are always newest-first by posted date, and that is the only order accepted: [{"field":"posted_at","desc":true}]. date_posted is accepted as a synonym for posted_at, the field name is case-insensitive, and desc may be omitted. Any other field, "desc": false, or more than one sort key returns 400 rather than being silently ignored.',
     ).optional(),
     status: z.enum(["active", "closed", "any"]).describe(

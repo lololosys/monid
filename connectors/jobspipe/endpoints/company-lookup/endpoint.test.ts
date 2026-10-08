@@ -28,13 +28,11 @@ Deno.test("jobspipe#v1/companies/{key} happy: one flat credit, no meter in the b
         credits: { default: 1 },
         evidence: { CALL: 1 },
     });
+    // the whole record, untouched: no meter in this body, nothing plucked
+    assertEquals(result.output, fixture.calls[0].res.body);
     const output = result.output as Record<string, Json>;
     assertEquals(output.domain, "stripe.com");
     assertEquals(output.employee_count, 16983);
-    assertEquals(
-        (output.location as Record<string, Json>).city,
-        "South San Francisco",
-    );
 });
 
 Deno.test("jobspipe#v1/companies/{key} miss: 404 is data, zero usage, digested", async () => {
@@ -99,10 +97,9 @@ Deno.test({
             false,
             JSON.stringify(result.output),
         );
-        assertEquals(result.usage, {
-            credits: { default: 1 },
-            evidence: { CALL: 1 },
-        });
+        // shape, not amounts: the flat call settled on the default pool
+        assertEquals(Object.keys(result.usage.credits), ["default"]);
+        assertEquals(Object.keys(result.usage.evidence), ["CALL"]);
         assertEquals(
             (result.output as Record<string, Json>).domain,
             "stripe.com",
